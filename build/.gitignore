@@ -1,0 +1,9 @@
+dist/
+build/*.wixobj
+build/*.wixpdb
+build/*.bmp
+base/licenses.db
+base/.secret
+base/xray/
+__pycache__/
+*.pyc
