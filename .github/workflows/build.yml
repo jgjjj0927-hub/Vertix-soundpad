@@ -1,0 +1,49 @@
+name: build virtux
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: setup python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r build/requirements-build.txt
+
+      - name: generate banners
+        run: python build/gen_banners.py
+
+      - name: build exe (nuitka)
+        run: python build/build_nuitka.py
+
+      - name: install wix toolset
+        run: |
+          choco install wixtoolset --no-progress -y
+          echo "C:\Program Files (x86)\WiX Toolset v3.14\bin" >> $env:GITHUB_PATH
+
+      - name: build msi (wix)
+        shell: pwsh
+        run: |
+          candle.exe -out build\virtux.wixobj build\installer.wxs
+          light.exe -out dist\virtux.msi build\virtux.wixobj
+
+      - name: upload msi only
+        uses: actions/upload-artifact@v4
+        with:
+          name: virtux-msi
+          path: dist/virtux.msi
+          if-no-files-found: error
