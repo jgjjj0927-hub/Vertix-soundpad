@@ -1,157 +1,481 @@
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from core.audio import SoundPad
-from core.license import activate, check_limit
-from core.proxy import load_config, save_config, validate_config, start_proxy
-from core.effects import mic_test
-
-
-class VirtuxApp(tk.Tk):
-    def __init__(self):
-        super().__init__()
-        self.title("virtux")
-        self.geometry("900x600")
-        self.configure(bg="#ffffff")
-        self.pad = SoundPad()
-        self.limit_sounds, self.limit_sec = check_limit()
-        self.pinned = False
-
-        self._build_ui()
-        self._bind_hotkeys()
-
-    def _build_ui(self):
-        top = tk.Frame(self, bg="#ffffff")
-        top.pack(fill="x", padx=10, pady=8)
-        tk.Button(top, text="+ add sound", command=self.add_sound,
-                  bg="#f0f0f0", fg="#000", relief="flat").pack(side="left")
-        tk.Button(top, text="pin", command=self.toggle_pin,
-                  bg="#f0f0f0", fg="#000", relief="flat").pack(side="left", padx=6)
-
-        self.listbox = tk.Listbox(self, bg="#ffffff", fg="#000",
-                                  selectbackground="#7aa2f7", selectforeground="#000",
-                                  relief="solid", font=("Consolas", 11))
-        self.listbox.pack(fill="both", expand=True, padx=10, pady=6)
-        self.listbox.bind("<Double-Button-1>", lambda e: self.play_selected())
-
-        nb = ttk.Notebook(self)
-        nb.pack(fill="x", padx=10, pady=6)
-
-        self.settings_tab = tk.Frame(nb, bg="#ffffff")
-        self._build_settings(self.settings_tab)
-        nb.add(self.settings_tab, text="Settings")
-
-        self.proxy_tab = tk.Frame(nb, bg="#ffffff")
-        self._build_proxy(self.proxy_tab)
-        nb.add(self.proxy_tab, text="Proxy")
-
-        bottom = tk.Frame(self, bg="#ffffff")
-        bottom.pack(fill="x", padx=10, pady=8)
-        self.entry_key = tk.Entry(bottom, bg="#ffffff", fg="#000", relief="solid")
-        self.entry_key.pack(side="left", fill="x", expand=True)
-        tk.Button(bottom, text="activate", command=self.do_activate,
-                  bg="#7aa2f7", fg="#000", relief="flat").pack(side="left", padx=6)
-        self.status = tk.Label(bottom, text=f"no activation: {self.limit_sounds} sounds / {self.limit_sec}s",
-                               bg="#ffffff", fg="#000")
-        self.status.pack(side="left", padx=6)
-
-    def _build_settings(self, parent):
-        tk.Label(parent, text="echo (ms):", bg="#ffffff", fg="#000").pack(anchor="w", padx=8)
-        self.echo_ms = tk.Scale(parent, from_=0, to=1000, orient="horizontal",
-                                bg="#ffffff", fg="#000", highlightthickness=0)
-        self.echo_ms.pack(fill="x", padx=8)
-        tk.Label(parent, text="decay:", bg="#ffffff", fg="#000").pack(anchor="w", padx=8)
-        self.echo_decay = tk.Scale(parent, from_=0.0, to=1.0, resolution=0.05,
-                                   orient="horizontal", bg="#ffffff", fg="#000",
-                                   highlightthickness=0)
-        self.echo_decay.pack(fill="x", padx=8)
-
-        tk.Label(parent, text="output device:", bg="#ffffff", fg="#000").pack(anchor="w", padx=8)
-        self.device_var = tk.StringVar()
-        self.device_combo = ttk.Combobox(parent, textvariable=self.device_var, state="readonly")
-        devices = self.pad.list_output_devices()
-        self.device_map = {name: idx for idx, name in devices}
-        self.device_combo["values"] = [name for _, name in devices]
-        self.device_combo.pack(fill="x", padx=8)
-        self.device_combo.bind("<<ComboboxSelected>>", self.on_device_change)
-
-        tk.Button(parent, text="test microphone", command=self.test_mic,
-                  bg="#f0f0f0", fg="#000", relief="flat").pack(anchor="w", padx=8, pady=6)
-
-    def _build_proxy(self, parent):
-        tk.Button(parent, text="load JSON", command=self.load_proxy,
-                  bg="#f0f0f0", fg="#000", relief="flat").pack(anchor="w", padx=8, pady=4)
-        tk.Button(parent, text="save", command=self.save_proxy,
-                  bg="#f0f0f0", fg="#000", relief="flat").pack(anchor="w", padx=8)
-        tk.Button(parent, text="start xray", command=self.run_proxy,
-                  bg="#f0f0f0", fg="#000", relief="flat").pack(anchor="w", padx=8, pady=4)
-        self.proxy_text = tk.Text(parent, height=10, bg="#ffffff", fg="#000", relief="solid")
-        self.proxy_text.pack(fill="both", expand=True, padx=8, pady=6)
-
-    def _bind_hotkeys(self):
-        self.bind("<Alt_L>", lambda e: self.play_selected())
-        self.bind("<Alt_R>", lambda e: self.play_selected())
-        self.bind("<Insert>", lambda e: self.toggle_pin())
-
-    def on_device_change(self, event=None):
-        name = self.device_var.get()
-        self.pad.output_device = self.device_map.get(name)
-
-    def toggle_pin(self):
-        self.pinned = not self.pinned
-        self.attributes("-topmost", self.pinned)
-        self.status.config(text=("pinned" if self.pinned else "unpinned"))
-
-    def add_sound(self):
-        if len(self.pad.sounds) >= self.limit_sounds:
-            messagebox.showwarning("limit", f"max {self.limit_sounds} sounds without activation")
-            return
-        path = filedialog.askopenfilename(filetypes=[("audio", "*.mp3 *.wav *.ogg *.flac")])
-        if path and self.pad.add(path):
-            self.listbox.insert("end", Path(path).name)
-
-    def play_selected(self):
-        sel = self.listbox.curselection()
-        if sel:
-            self.pad.play(sel[0])
-
-    def do_activate(self):
-        ok, msg = activate(self.entry_key.get().strip())
-        messagebox.showinfo("activation", msg)
-        if ok:
-            self.limit_sounds, self.limit_sec = check_limit()
-            self.status.config(text=f"activated: {self.limit_sounds} sounds")
-
-    def test_mic(self):
-        level = mic_test(1.5)
-        messagebox.showinfo("microphone", f"peak level: {level:.2f}")
-
-    def load_proxy(self):
-        path = filedialog.askopenfilename(filetypes=[("json", "*.json")])
-        if path:
-            self.proxy_text.delete("1.0", "end")
-            self.proxy_text.insert("1.0", Path(path).read_text(encoding="utf-8"))
-
-    def save_proxy(self):
-        import json
-        try:
-            cfg = json.loads(self.proxy_text.get("1.0", "end"))
-            ok, msg = validate_config(cfg)
-            if ok and save_config(cfg):
-                messagebox.showinfo("proxy", "saved")
-            else:
-                messagebox.showerror("proxy", msg)
-        except Exception as e:
-            messagebox.showerror("proxy", str(e))
-
-    def run_proxy(self):
-        ok, msg = start_proxy()
-        messagebox.showinfo("xray", msg)
-
-
-if __name__ == "__main__":
-    app = VirtuxApp()
-    app.mainloop()
+{
+  "burstObservatory" : {
+    "pingConfig" : {
+      "connectivity" : "",
+      "destination" : "http:\/\/www.gstatic.com\/generate_204",
+      "interval" : "10m",
+      "sampling" : 3,
+      "timeout" : "5s"
+    },
+    "subjectSelector" : [
+      "proxy"
+    ]
+  },
+  "dns" : {
+    "queryStrategy" : "UseIPv4",
+    "servers" : [
+      {
+        "address" : "localhost",
+        "domains" : [
+          "domain:ru",
+          "domain:su",
+          "domain:xn--p1ai",
+          "domain:yandex.net",
+          "domain:yastatic.net",
+          "domain:vk.com",
+          "domain:userapi.com"
+        ]
+      },
+      "https:\/\/8.8.8.8\/dns-query",
+      "https:\/\/77.88.8.8\/dns-query"
+    ]
+  },
+  "inbounds" : [
+    {
+      "listen" : "127.0.0.1",
+      "port" : 10808,
+      "protocol" : "socks",
+      "settings" : {
+        "allowTransparent" : false,
+        "auth" : "noauth",
+        "udp" : true
+      },
+      "sniffing" : {
+        "destOverride" : [
+          "http",
+          "tls"
+        ],
+        "enabled" : true,
+        "routeOnly" : false
+      },
+      "tag" : "socks"
+    },
+    {
+      "listen" : "127.0.0.1",
+      "port" : 10809,
+      "protocol" : "http",
+      "settings" : {
+        "allowTransparent" : false,
+        "auth" : "noauth",
+        "udp" : true
+      },
+      "sniffing" : {
+        "destOverride" : [
+          "http",
+          "tls"
+        ],
+        "enabled" : true,
+        "routeOnly" : false
+      },
+      "tag" : "http"
+    }
+  ],
+  "log" : {
+    "access" : "\/private\/var\/mobile\/Containers\/Shared\/AppGroup\/66B561C9-9965-49BA-9EA8-D5C9CACADD2B\/Library\/Application Support\/Xray\/logs\/access.log",
+    "dnsLog" : true,
+    "loglevel" : "Warning"
+  },
+  "outbounds" : [
+    {
+      "protocol" : "vless",
+      "settings" : {
+        "vnext" : [
+          {
+            "address" : "de1-7.itray.net",
+            "port" : 443,
+            "users" : [
+              {
+                "alterId" : 0,
+                "email" : "https:\/\/gozargah.github.io\/marzban\/",
+                "encryption" : "none",
+                "flow" : "xtls-rprx-vision",
+                "id" : "175d3977-0f2b-4629-a1d3-3fe35c9c3c51",
+                "security" : "auto"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings" : {
+        "network" : "tcp",
+        "realitySettings" : {
+          "fingerprint" : "firefox",
+          "publicKey" : "kBTMVLCNE0jjwuJF6H5-65l5Pe0QToS0Hg-9Tmaa7Sk",
+          "serverName" : "images.porsche.com",
+          "shortId" : "1a2b3c4d",
+          "show" : false
+        },
+        "security" : "reality"
+      },
+      "tag" : "proxy"
+    },
+    {
+      "protocol" : "vless",
+      "settings" : {
+        "vnext" : [
+          {
+            "address" : "de1-2.itray.net",
+            "port" : 443,
+            "users" : [
+              {
+                "alterId" : 0,
+                "email" : "https:\/\/gozargah.github.io\/marzban\/",
+                "encryption" : "none",
+                "flow" : "xtls-rprx-vision",
+                "id" : "175d3977-0f2b-4629-a1d3-3fe35c9c3c51",
+                "security" : "auto"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings" : {
+        "network" : "tcp",
+        "realitySettings" : {
+          "fingerprint" : "firefox",
+          "publicKey" : "kBTMVLCNE0jjwuJF6H5-65l5Pe0QToS0Hg-9Tmaa7Sk",
+          "serverName" : "images.porsche.com",
+          "shortId" : "1a2b3c4d",
+          "show" : false
+        },
+        "security" : "reality"
+      },
+      "tag" : "proxy-2"
+    },
+    {
+      "protocol" : "vless",
+      "settings" : {
+        "vnext" : [
+          {
+            "address" : "de1-6.itray.net",
+            "port" : 443,
+            "users" : [
+              {
+                "alterId" : 0,
+                "email" : "https:\/\/gozargah.github.io\/marzban\/",
+                "encryption" : "none",
+                "flow" : "xtls-rprx-vision",
+                "id" : "175d3977-0f2b-4629-a1d3-3fe35c9c3c51",
+                "security" : "auto"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings" : {
+        "network" : "tcp",
+        "realitySettings" : {
+          "fingerprint" : "firefox",
+          "publicKey" : "kBTMVLCNE0jjwuJF6H5-65l5Pe0QToS0Hg-9Tmaa7Sk",
+          "serverName" : "images.porsche.com",
+          "shortId" : "1a2b3c4d",
+          "show" : false
+        },
+        "security" : "reality"
+      },
+      "tag" : "proxy-3"
+    },
+    {
+      "protocol" : "vless",
+      "settings" : {
+        "vnext" : [
+          {
+            "address" : "de1-4.itray.net",
+            "port" : 443,
+            "users" : [
+              {
+                "alterId" : 0,
+                "email" : "https:\/\/gozargah.github.io\/marzban\/",
+                "encryption" : "none",
+                "flow" : "xtls-rprx-vision",
+                "id" : "175d3977-0f2b-4629-a1d3-3fe35c9c3c51",
+                "security" : "auto"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings" : {
+        "network" : "tcp",
+        "realitySettings" : {
+          "fingerprint" : "firefox",
+          "publicKey" : "kBTMVLCNE0jjwuJF6H5-65l5Pe0QToS0Hg-9Tmaa7Sk",
+          "serverName" : "images.porsche.com",
+          "shortId" : "1a2b3c4d",
+          "show" : false
+        },
+        "security" : "reality"
+      },
+      "tag" : "proxy-4"
+    },
+    {
+      "protocol" : "vless",
+      "settings" : {
+        "vnext" : [
+          {
+            "address" : "de1-8.itray.net",
+            "port" : 443,
+            "users" : [
+              {
+                "alterId" : 0,
+                "email" : "https:\/\/gozargah.github.io\/marzban\/",
+                "encryption" : "none",
+                "flow" : "xtls-rprx-vision",
+                "id" : "175d3977-0f2b-4629-a1d3-3fe35c9c3c51",
+                "security" : "auto"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings" : {
+        "network" : "tcp",
+        "realitySettings" : {
+          "fingerprint" : "firefox",
+          "publicKey" : "kBTMVLCNE0jjwuJF6H5-65l5Pe0QToS0Hg-9Tmaa7Sk",
+          "serverName" : "images.porsche.com",
+          "shortId" : "1a2b3c4d",
+          "show" : false
+        },
+        "security" : "reality"
+      },
+      "tag" : "proxy-5"
+    },
+    {
+      "protocol" : "vless",
+      "settings" : {
+        "vnext" : [
+          {
+            "address" : "de1-10.itray.net",
+            "port" : 443,
+            "users" : [
+              {
+                "alterId" : 0,
+                "email" : "https:\/\/gozargah.github.io\/marzban\/",
+                "encryption" : "none",
+                "flow" : "xtls-rprx-vision",
+                "id" : "175d3977-0f2b-4629-a1d3-3fe35c9c3c51",
+                "security" : "auto"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings" : {
+        "network" : "tcp",
+        "realitySettings" : {
+          "fingerprint" : "firefox",
+          "publicKey" : "kBTMVLCNE0jjwuJF6H5-65l5Pe0QToS0Hg-9Tmaa7Sk",
+          "serverName" : "images.porsche.com",
+          "shortId" : "1a2b3c4d",
+          "show" : false
+        },
+        "security" : "reality"
+      },
+      "tag" : "proxy-6"
+    },
+    {
+      "protocol" : "vless",
+      "settings" : {
+        "vnext" : [
+          {
+            "address" : "de1-5.itray.net",
+            "port" : 443,
+            "users" : [
+              {
+                "alterId" : 0,
+                "email" : "https:\/\/gozargah.github.io\/marzban\/",
+                "encryption" : "none",
+                "flow" : "xtls-rprx-vision",
+                "id" : "175d3977-0f2b-4629-a1d3-3fe35c9c3c51",
+                "security" : "auto"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings" : {
+        "network" : "tcp",
+        "realitySettings" : {
+          "fingerprint" : "firefox",
+          "publicKey" : "kBTMVLCNE0jjwuJF6H5-65l5Pe0QToS0Hg-9Tmaa7Sk",
+          "serverName" : "images.porsche.com",
+          "shortId" : "1a2b3c4d",
+          "show" : false
+        },
+        "security" : "reality"
+      },
+      "tag" : "proxy-7"
+    },
+    {
+      "protocol" : "vless",
+      "settings" : {
+        "vnext" : [
+          {
+            "address" : "de1-1.itray.net",
+            "port" : 443,
+            "users" : [
+              {
+                "alterId" : 0,
+                "email" : "https:\/\/gozargah.github.io\/marzban\/",
+                "encryption" : "none",
+                "flow" : "xtls-rprx-vision",
+                "id" : "175d3977-0f2b-4629-a1d3-3fe35c9c3c51",
+                "security" : "auto"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings" : {
+        "network" : "tcp",
+        "realitySettings" : {
+          "fingerprint" : "firefox",
+          "publicKey" : "kBTMVLCNE0jjwuJF6H5-65l5Pe0QToS0Hg-9Tmaa7Sk",
+          "serverName" : "images.porsche.com",
+          "shortId" : "1a2b3c4d",
+          "show" : false
+        },
+        "security" : "reality"
+      },
+      "tag" : "proxy-8"
+    },
+    {
+      "protocol" : "vless",
+      "settings" : {
+        "vnext" : [
+          {
+            "address" : "de1-9.itray.net",
+            "port" : 443,
+            "users" : [
+              {
+                "alterId" : 0,
+                "email" : "https:\/\/gozargah.github.io\/marzban\/",
+                "encryption" : "none",
+                "flow" : "xtls-rprx-vision",
+                "id" : "175d3977-0f2b-4629-a1d3-3fe35c9c3c51",
+                "security" : "auto"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings" : {
+        "network" : "tcp",
+        "realitySettings" : {
+          "fingerprint" : "firefox",
+          "publicKey" : "kBTMVLCNE0jjwuJF6H5-65l5Pe0QToS0Hg-9Tmaa7Sk",
+          "serverName" : "images.porsche.com",
+          "shortId" : "1a2b3c4d",
+          "show" : false
+        },
+        "security" : "reality"
+      },
+      "tag" : "proxy-9"
+    },
+    {
+      "protocol" : "vless",
+      "settings" : {
+        "vnext" : [
+          {
+            "address" : "de1-3.itray.net",
+            "port" : 443,
+            "users" : [
+              {
+                "alterId" : 0,
+                "email" : "https:\/\/gozargah.github.io\/marzban\/",
+                "encryption" : "none",
+                "flow" : "xtls-rprx-vision",
+                "id" : "175d3977-0f2b-4629-a1d3-3fe35c9c3c51",
+                "security" : "auto"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings" : {
+        "network" : "tcp",
+        "realitySettings" : {
+          "fingerprint" : "firefox",
+          "publicKey" : "kBTMVLCNE0jjwuJF6H5-65l5Pe0QToS0Hg-9Tmaa7Sk",
+          "serverName" : "images.porsche.com",
+          "shortId" : "1a2b3c4d",
+          "show" : false
+        },
+        "security" : "reality"
+      },
+      "tag" : "proxy-10"
+    },
+    {
+      "protocol" : "freedom",
+      "tag" : "direct"
+    }
+  ],
+  "remarks" : "🇩🇪 Germany #1⚡10 Gbit",
+  "routing" : {
+    "balancers" : [
+      {
+        "fallbackTag" : "proxy",
+        "selector" : [
+          "proxy"
+        ],
+        "strategy" : {
+          "settings" : {
+            "baselines" : [
+              "80ms",
+              "150ms",
+              "300ms"
+            ],
+            "expected" : 2,
+            "maxRTT" : "1500ms",
+            "tolerance" : 0.050000000000000003
+          },
+          "type" : "leastLoad"
+        },
+        "tag" : "Auto_Balancer"
+      }
+    ],
+    "domainMatcher" : "hybrid",
+    "domainStrategy" : "IPIfNonMatch",
+    "rules" : [
+      {
+        "ip" : [
+          "127.0.0.0\/8",
+          "10.0.0.0\/8",
+          "172.16.0.0\/12",
+          "192.168.0.0\/16",
+          "169.254.0.0\/16",
+          "100.64.0.0\/10"
+        ],
+        "outboundTag" : "direct",
+        "type" : "field"
+      },
+      {
+        "domain" : [
+          "domain:ru",
+          "domain:su",
+          "domain:xn--p1ai",
+          "domain:vk.com",
+          "domain:userapi.com",
+          "domain:mycdn.me",
+          "domain:yandex.net",
+          "domain:yandex.com",
+          "domain:sberbank.com",
+          "domain:gosuslugi.rt.ru"
+        ],
+        "outboundTag" : "direct",
+        "type" : "field"
+      },
+      {
+        "balancerTag" : "Auto_Balancer",
+        "network" : "tcp,udp",
+        "type" : "field"
+      },
+      {
+        "network" : "tcp,udp",
+        "outboundTag" : "proxy",
+        "type" : "field"
+      }
+    ]
+  }
+}
