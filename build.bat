@@ -3,63 +3,63 @@ setlocal
 
 cd /d "%~dp0"
 
-echo [1/4] проверка python...
+echo [1/5] checking python...
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo python не найден в PATH. установи python и добавь в PATH.
+    echo python not found in PATH. install python and add it to PATH.
     pause
     exit /b 1
 )
 
-echo [2/4] установка зависимостей...
+echo [2/5] installing build dependencies...
 python -m pip install --upgrade pip >nul
 python -m pip install -r build\requirements-build.txt
 if errorlevel 1 (
-    echo ошибка установки зависимостей.
+    echo failed to install dependencies.
     pause
     exit /b 1
 )
 
-echo [3/4] генерация баннеров...
+echo [3/5] generating installer banners...
 python build\gen_banners.py
 if errorlevel 1 (
-    echo ошибка генерации баннеров.
+    echo failed to generate banners.
     pause
     exit /b 1
 )
 
-echo [4/4] сборка exe через nuitka...
+echo [4/5] building exe with nuitka...
 python build\build_nuitka.py
 if errorlevel 1 (
-    echo ошибка сборки exe.
+    echo failed to build exe.
     pause
     exit /b 1
 )
 
-echo [5/5] сборка msi через wix...
+echo [5/5] building msi with wix...
 where candle.exe >nul 2>&1
 if errorlevel 1 (
-    echo WiX не найден в PATH.
-    echo установи: choco install wixtoolset -y
-    echo или добавь C:\Program Files (x86)\WiX Toolset v3.14\bin в PATH.
+    echo WiX not found in PATH.
+    echo install: choco install wixtoolset -y
+    echo or add C:\Program Files (x86)\WiX Toolset v3.14\bin to PATH.
     pause
     exit /b 1
 )
 
 candle.exe -out build\virtux.wixobj build\installer.wxs
 if errorlevel 1 (
-    echo ошибка candle.exe.
+    echo candle.exe failed.
     pause
     exit /b 1
 )
 
 light.exe -out dist\virtux.msi build\virtux.wixobj
 if errorlevel 1 (
-    echo ошибка light.exe.
+    echo light.exe failed.
     pause
     exit /b 1
 )
 
 echo.
-echo готово: dist\virtux.msi
+echo done: dist\virtux.msi
 pause
